@@ -1,0 +1,13 @@
+Pipfile.lock
+Coding Challenge Task Description.pdf
+reports.yaml
+htmlcov
+dumpster
+.coverage
+playground
+*.sqlite
+*log
+Docker
+__pycache__
+volume/
+auction_playground
