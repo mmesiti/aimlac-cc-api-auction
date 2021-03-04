@@ -4,13 +4,15 @@ import auction_db
 import query_bmrs as bmrs
 
 import pytest
-from datetime import datetime,date
+from datetime import datetime,date,time
 import pandas as pd
 import os
 
 @pytest.fixture
 def db_endpoint():
-    yield auction_db.AuctionDbEndpoint("test.db")
+    yield auction_db.AuctionDbEndpoint(filename = "test.db",
+                                       logger = None,
+                                       order_deadline = time(9))
     os.remove("test.db")
 
 keys = ["AAAAAAA","BBBBBB","CCCCCCC"]
@@ -45,6 +47,12 @@ orders =[
      "type" : "SELL",
      "volume": "0.10",
      "price":"80"},
+    {"timestamp" : datetime(2021,3,4,8),
+     "applying_date" : date(2021,3,6),
+     "hour_ID": 17,
+     "type" : "SELL",
+     "volume": "0.10",
+     "price":"80"},
 ]
 
 @pytest.fixture
@@ -74,3 +82,30 @@ def imbalance_prices():
     return bmrs.convert_columns(df,
                     bmrs.imbalance_prices_selected_coltypes,
                     bmrs.imbalance_prices_selected_columns)
+
+@pytest.fixture
+def db_withapidata(db_endpoint,market_index,imbalance_prices):
+    db_endpoint.write_market_index(market_index)
+    db_endpoint.write_imbalance_prices(imbalance_prices)
+    return db_endpoint
+
+@pytest.fixture
+def db_withapidata_and_keys(db_endpoint,market_index,imbalance_prices):
+    for key in keys:
+        db_endpoint.write_key(key)
+    db_endpoint.write_market_index(market_index)
+    db_endpoint.write_imbalance_prices(imbalance_prices)
+    return db_endpoint
+
+@pytest.fixture
+def pandas_orders():
+    df = pd.read_csv("./tests/orders.csv",sep=',')
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df["applying_date"] = pd.to_datetime(df["applying_date"]).dt.date
+    return df
+
+@pytest.fixture
+def db_complete(db_withapidata_and_keys,pandas_orders):
+    key = keys[1]
+    _nwritten,_message = db_withapidata_and_keys.write_orders_pandas(key,pandas_orders)
+    return db_withapidata_and_keys

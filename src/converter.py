@@ -21,3 +21,21 @@ def convert_imbalance_prices_columns(df):
 
     mapper = dict(zip(pd_cols,db_fields))
     return df.rename(mapper=mapper,axis = "columns")
+
+def pandas_orders_to_records(df):
+    orders = df.to_dict('records')
+
+    def fix_ts(order):
+        return order | {"timestamp": order["timestamp"].to_pydatetime()}
+
+    def fix_applying_date(order):
+        return order | {"applying_date" : order["applying_date"].strftime("%Y-%m-%d") }
+
+    return [fix_applying_date(fix_ts(o)) for o in orders ]
+
+
+def datetime_to_period(timedate):
+    raise NotImplementedError
+
+def period_to_datetime(date_,period):
+    raise NotImplementedError

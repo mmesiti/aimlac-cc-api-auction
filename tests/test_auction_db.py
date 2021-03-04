@@ -1,14 +1,7 @@
 #!/usr/bin/env python3
 
 import auction_db
-from fixtures import (db_worders,
-                      db_wkeys,
-                      db_endpoint,
-                      keys,
-                      orders,
-                      market_index,
-                      imbalance_prices)
-
+from fixtures import *
 
 from datetime import datetime,date
 import pytest
@@ -121,7 +114,7 @@ def test_write_wrong_type():
      order["type"] = 'french fries'
      assert not auction_db.AuctionDbEndpoint.validate_order(order)
 
-def test_process_order_type_allcaps():
+def test_sanify_order_type_allcaps():
       order = {"timestamp" : datetime(2021,3,4,8),
      "applying_date" : date(2021,3,5),
      "hour_ID": 1,
@@ -129,15 +122,15 @@ def test_process_order_type_allcaps():
      "volume": "0.10",
      "price":"80"}
 
-      processed = auction_db.AuctionDbEndpoint.process_order(1,order)
+      processed = auction_db.AuctionDbEndpoint.sanify_order(1,order)
 
-      assert "SELL" in processed
+      assert "SELL" == processed["type"]
 
 def test_read_order_slot_wrong_key(db_worders):
     testdate = date(2021,3,5)
     period = 17
 
-    res = db_worders.read_orders_slot(key=keys[0], # the wrong one
+    res = db_worders.read_orders(key=keys[0], # the wrong one
                                       applying_date = testdate,
                                       period = period)
 
@@ -147,22 +140,29 @@ def test_read_order_slot_inexistent_key(db_worders):
     testdate = date(2021,3,5)
     period = 17
 
-    res = db_worders.read_orders_slot(key="WRONG",
+    res = db_worders.read_orders(key="WRONG",
                                       applying_date = testdate,
                                       period = period)
 
     assert res is None
 
-def test_read_orders_slot(db_worders):
+def test_read_orders(db_worders):
     testdate = date(2021,3,5)
     period = 17
 
-    res = db_worders.read_orders_slot(key=keys[1],
+    res = db_worders.read_orders(key=keys[1],
                                       applying_date = testdate,
                                       period = period)
 
     assert len(res) == 2
 
+def test_read_orders_wholeday(db_worders):
+    testdate = date(2021,3,5)
+
+    res = db_worders.read_orders(key=keys[1],
+                                      applying_date = testdate)
+
+    assert len(res) == 4
 
 def test_write_market_index(db_endpoint,market_index):
     db_endpoint.write_market_index(market_index)
@@ -202,3 +202,87 @@ def test_write_imbalance_prices_twice(db_endpoint,imbalance_prices):
     FROM imbalance_prices;''').fetchone()
 
     assert lines == len(imbalance_prices)
+
+def test_read_imbalance_prices_all(db_withapidata,imbalance_prices):
+    start_date = date(2021,2,18)
+    end_date = date(2021,2,20)
+    read_data = db_withapidata.read_imbalance_prices(start_date,end_date)
+
+    assert len(read_data) == len(imbalance_prices)
+
+def test_read_imbalance_prices_none(db_withapidata):
+    start_date = date(2021,2,17)
+    end_date = date(2021,2,18)
+    read_data = db_withapidata.read_imbalance_prices(start_date,end_date)
+
+    assert len(read_data) == 0
+
+def test_read_market_index_all(db_withapidata,market_index):
+    start_date = date(2021,2,18)
+    end_date = date(2021,2,21)
+    read_data = db_withapidata.read_market_index(start_date,end_date)
+
+    assert len(read_data) == len(market_index)
+
+def test_read_market_index_none(db_withapidata,market_index):
+    start_date = date(2021,2,17)
+    end_date = date(2021,2,18)
+    read_data = db_withapidata.read_market_index(start_date,end_date)
+
+    assert len(read_data) == 0
+
+def test_write_orders_pandas(db_wkeys,pandas_orders):
+    key = keys[0]
+
+    n, message = db_wkeys.write_orders_pandas(key,pandas_orders)
+    assert n == len(pandas_orders)
+
+
+def test_read_orders_accept_reject(db_complete,pandas_orders,market_index):
+
+    applying_date = date(2021,2,19)
+    res = db_complete.read_orders(key=keys[1],
+                                  applying_date = applying_date)
+
+    mid19 = (market_index.loc[market_index["Settlement Date"] == applying_date,
+                             ["Settlement Period","Price"]]
+             .rename(mapper = {"Price":"market_price",
+                               "Settlement Period":"period"},
+                     axis = "columns"))
+
+    ord19 = (pandas_orders.loc[pandas_orders["applying_date"] == applying_date,
+                              ["hour_ID","price","type"]]
+             .rename(mapper = {"price":"order_price",
+                               "hour_ID":"period"},
+                     axis = "columns"))
+
+
+    ords = pd.merge(mid19,
+                    ord19,
+                    on = "period"
+                    )
+    ords["accepted"] = (((ords["market_price"]>=ords["order_price"]) & (ords["type"] == "SELL"))
+                        |((ords["market_price"]<=ords["order_price"]) & (ords["type"] == "BUY")))
+
+
+    res = pd.DataFrame(res)
+    assert len(res) == len(ords)
+    assert (res["accepted"]== ords["accepted"]).all()
+
+
+def test_read_orders_unknown_state(db_complete,pandas_orders,market_index):
+
+    applying_date = date(2021,2,19)
+
+    ords = [ o for o in orders if o["applying_date"] == date(2021,3,5) ]
+    nwritten,message = db_complete.write_orders(keys[1],ords)
+
+    res = db_complete.read_orders(key=keys[1],
+                                  applying_date = date(2021,3,5))
+
+
+    res = pd.DataFrame(res)
+
+
+    assert len(ords) == len(res)
+    assert pd.isna(res["accepted"].iloc[-len(orders):]).all()

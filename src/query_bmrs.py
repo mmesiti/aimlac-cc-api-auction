@@ -31,8 +31,7 @@ def get_market_index(from_date, to_date=None, period='*'):
     url = '/'.join([url_base, REPORT_NAME, VERSION])
 
     if to_date is None:
-        to_date = datetime.strptime(format_date(from_date),
-                                    DATE_FORMAT) + timedelta(days=1)
+        to_date = from_date # one day worth of data
 
     params = {
         "APIKey": apikey,
@@ -89,11 +88,18 @@ market_index_clean_coltypes = [
     float,
 ]
 
-def get_market_index_clean(from_date, to_date=None, period='*'):
+def get_market_index_converted(from_date, to_date=None, period='*'):
     df = _get_market_index_clean(from_date, to_date, period)
     return convert_columns(df.drop(["Data Provider", "Record Type"], axis="columns"),
                            market_index_clean_coltypes,
                            market_index_clean_columns)
+
+def get_market_index_clean(from_date, to_date=None, period='*'):
+    df_converted = get_market_index_converted(from_date, to_date, period)
+    df_converted["Settlement Period"] = (df_converted["Settlement Period"]-1)//2+1
+    df_converted = df_converted.groupby(["Settlement Date","Settlement Period"]).mean()
+    df_converted["Volume"] *= 2
+    return df_converted.reset_index()
 
 
 imbalance_prices_selected_columns = [

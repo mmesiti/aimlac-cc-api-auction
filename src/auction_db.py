@@ -26,7 +26,7 @@ class AuctionDbEndpoint:
         "orders": {
             "fields": [
                 ("order_id", int, "PRIMARY KEY AUTOINCREMENT"),
-                ("key_id", str, ""),
+                ("key_id", int, ""),
                 ("timestamp", datetime, ""),
                 ("applying_date", date, ""),
                 ("hour_ID", int, ""),  # 1-24
@@ -54,9 +54,10 @@ class AuctionDbEndpoint:
         if self.logger:
             self.logger.debug(*args, **kwargs)
 
-    def __init__(self, filename, logger=None):
-        self.logger = None
+    def __init__(self, filename, logger=None, order_deadline = time(9)):
         self.filename = filename
+        self.logger = logger
+        self.deadline = order_deadline
         if not os.path.exists(filename):
             self._cursor, self._connection = setup_db(filename,
                                                       AuctionDbEndpoint.tables)
@@ -80,6 +81,8 @@ class AuctionDbEndpoint:
             self.execute(f'''
             INSERT INTO keys VALUES (NULL,'{self._encrypt(key)}');
             ''')
+            self._connection.commit()
+        self.logger_info(f"Written key")
 
     def find_key_id(self, key):
         res = self.execute(f'''
@@ -90,10 +93,9 @@ class AuctionDbEndpoint:
         if res:
             return res[0]
 
-    @staticmethod
-    def check_order_not_late(order):
+    def check_order_not_late(self,order):
         applying = order["applying_date"]
-        deadline = datetime.combine(applying - timedelta(days=1), time(9))
+        deadline = datetime.combine(applying - timedelta(days=1), self.deadline )
         return order["timestamp"] < deadline
 
     @staticmethod
@@ -104,43 +106,66 @@ class AuctionDbEndpoint:
         return (order["type"].upper() in AuctionDbEndpoint.order_types
                 and int(order["hour_ID"]) > 0 and int(order["hour_ID"]) < 25)
 
+
     @staticmethod
-    def process_order(key_id, order):
+    def get_field_names(table_name):
+        return [t[0] for t in AuctionDbEndpoint.tables[table_name]["fields"]]
+
+    @staticmethod
+    def sanify_order(key_id, order):
         if not AuctionDbEndpoint.validate_order(order):
             raise ValueError("Order syntactically invalid.")
 
-        fields = {"order_id": None, "key_id": key_id}
+        other_fs = {"order_id": None, "key_id": key_id}
 
-        o = (order | fields)
+        o = (order | other_fs)
         o["type"] = o["type"].upper()
 
-        field_names = [t[0] for t in AuctionDbEndpoint.tables["orders"]["fields"]]
-        o = [o[f] for f in field_names]
-
+        if type(o["applying_date"]) is str:
+            o["applying_date"] = (datetime
+                                  .strptime(o["applying_date"], "%Y-%m-%d")
+                                  .date())
+        assert type(o["applying_date"]) is date
         return o
+
+    @staticmethod
+    def to_list(order):
+        field_names = AuctionDbEndpoint.get_field_names("orders")
+        order = [order[f] for f in field_names]
+
+        return order
 
     def write_orders(self, key, orders):
         key_id = self.find_key_id(key)
 
-        ords = [
-            self.process_order(key_id, o) for o in orders
-            if self.check_order_not_late(o)
-        ]
+        ords = [self.sanify_order(key_id, o)
+                for o in orders]
+
+        ords = [ self.to_list(o) for o in ords
+                 if self.check_order_not_late(o)]
 
         placeholders = ','.join(['?'] * len(self.tables["orders"]["fields"]))
         self.executemany(
             f'''
         INSERT INTO orders VALUES ({placeholders});
         ''', ords)
+        self._connection.commit()
 
         message = ''
         nrejected = len(orders) - len(ords)
         if nrejected:
             message += f"rejected {nrejected} orders because of time limit;"
 
+        self.logger_info(f"Written {len(ords)} orders by id {key_id}")
         return len(ords), message
 
-    def read_orders_slot(self, key, applying_date, period):
+    def write_orders_pandas(self,key,df):
+        fixed_orders = converter.pandas_orders_to_records(df)
+        return self.write_orders(key,fixed_orders)
+
+    
+    def read_orders(self, key, applying_date, period = None):
+        period_selection = f"AND  hour_ID = '{period}'" if period else ''
         q = self.execute(f'''
         SELECT key_id
         FROM keys
@@ -150,14 +175,25 @@ class AuctionDbEndpoint:
             return None
         else:
             key_id, = q
+        field_names = AuctionDbEndpoint.get_field_names("orders")
+        selection = ','.join( f'orders.{f}' for f in field_names )
 
-        return self.execute(f'''
-        SELECT *
+        res = self.execute(f'''
+        SELECT {selection},
+        ((orders.price <= market_index.price AND orders.type = 'SELL') OR
+        (orders.price >= market_index.price AND orders.type = 'BUY') ) as accepted
         FROM orders
+        LEFT JOIN market_index
+        ON orders.applying_date = market_index.date
+        AND orders.hour_ID = market_index.period
         WHERE applying_date = '{date_to_sqlite(applying_date)}'
-        AND  hour_ID = '{period}'
+        {period_selection}
         AND key_id = '{key_id}';
         ''').fetchall()
+        field_names.append("accepted")
+        res = [ dict(zip(field_names,v)) for v in res ]
+        self.logger_info(f"Read {len(res)} orders.")
+        return res
 
     def _write_from_api(self,df_converted,tablename):
         data = df_converted.to_dict("split")["data"]
@@ -166,6 +202,8 @@ class AuctionDbEndpoint:
         REPLACE INTO {tablename}
         VALUES ({placeholders})
         ''',data)
+        self._connection.commit()
+        self.logger_info(f"Written/replaces {len(data)} rows into {tablename}.")
 
 
     def write_imbalance_prices(self, df):
@@ -176,9 +214,20 @@ class AuctionDbEndpoint:
         df_converted = converter.convert_market_index_columns(df)
         self._write_from_api(df_converted,"market_index")
 
+    def _read_api_data(self,start_date,end_date,table_name):
+        data = self.execute(f'''
+        SELECT *
+        FROM {table_name}
+        WHERE date >= '{date_to_sqlite(start_date)}'
+        AND date < '{date_to_sqlite(end_date)}';
+        ''').fetchall()
+        header = [ t[0] for t in self.tables[table_name]["fields"]]
+        res =  pd.DataFrame(data,columns = header)
+        self.logger_info(f"Written/replaces {len(data)} rows into {table_name}.")
+        return res
 
-    def read_imbalance_prices(self, start, end):
-        pass
+    def read_imbalance_prices(self, start_date, end_date):
+        return self._read_api_data(start_date,end_date,"imbalance_prices")
 
-    def read_market_index(self, start, end):
-        pass
+    def read_market_index(self, start_date, end_date):
+        return self._read_api_data(start_date,end_date,"market_index")

@@ -25,7 +25,7 @@ def test_get_market_index():
 
 def test_get_imbalance_prices():
     df = bmrs.get_imbalance_prices("2021-01-01")
-    assert df.shape == (96,3)
+    assert df.shape == (48,3)
 
 
 @pytest.mark.parametrize("d",["2021-02-14",
@@ -45,13 +45,27 @@ def test__get_market_index_clean():
     assert "N2EXMIDP" not in df["Data Provider"].values
 
 def test_get_market_index_clean():
-    df = bmrs.get_market_index_clean("2021-02-19")
+    df = bmrs.get_market_index_converted("2021-02-19")
     assert "Data Provider" not in df
     assert "Record Type" not in df
 
 def test_market_index_clean_columns():
-    df = bmrs.get_market_index_clean("2021-02-19")
+    df = bmrs.get_market_index_converted("2021-02-19")
     assert set(df.columns) == set(bmrs.market_index_clean_columns)
+
+def test_market_index_1_24():
+    df = bmrs.get_market_index_clean("2021-02-19")
+    assert not any(df["Settlement Period"] > 24)
+    assert not any(df["Settlement Period"] < 1)
+
+
+def test_avg_and_sum():
+    df_converted = bmrs.get_market_index_converted("2021-02-19")
+    df_clean = bmrs.get_market_index_clean("2021-02-19")
+    assert df_converted["Price"].iloc[:2].mean() == df_clean["Price"].iloc[0]
+    assert df_converted["Volume"].iloc[:2].sum() == df_clean["Volume"].iloc[0]
+
+
 
 def test_imbalance_prices_selected_columns():
     df = bmrs.get_imbalance_prices("2021-02-19")
