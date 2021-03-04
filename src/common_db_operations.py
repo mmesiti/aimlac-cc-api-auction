@@ -2,11 +2,14 @@
 import sqlite3
 from datetime import datetime, date
 
+
 def datetime_to_sqlite(td):
     return datetime.isoformat(td).replace('T', ' ')
 
+
 def date_to_sqlite(td):
     return date.isoformat(td)
+
 
 def setup_db(filename, schema):
     '''
@@ -29,7 +32,8 @@ def setup_db(filename, schema):
         return [(k, sqlite_types[v], mod) for k, v, mod in table_fields]
 
     def schema_to_tuples(tables):
-        return [(k, convert_fields(v["fields"]),v["constraints"]) for k, v in tables.items()]
+        return [(k, convert_fields(v["fields"]), v["constraints"])
+                for k, v in tables.items()]
 
     for table in schema_to_tuples(schema):
         k, vs, constrs = table
