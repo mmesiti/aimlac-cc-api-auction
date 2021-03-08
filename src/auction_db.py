@@ -213,10 +213,14 @@ class AuctionDbEndpoint:
 
     def write_imbalance_prices(self, df):
         df_converted = converter.convert_imbalance_prices_columns(df)
+        self.logger_info(f"Writing {len(df_converted)}"
+        " rows in 'imbalance_prices'")
         self._write_from_api(df_converted, "imbalance_prices")
 
     def write_market_index(self, df):
         df_converted = converter.convert_market_index_columns(df)
+        self.logger_info(f"Writing {len(df_converted)}"
+        " rows in 'market_index'")
         self._write_from_api(df_converted, "market_index")
 
     def _read_api_data(self, start_date, end_date, table_name):

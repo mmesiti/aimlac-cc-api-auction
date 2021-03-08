@@ -8,6 +8,8 @@ pytest = "*"
 requests = "*"
 pandas = "*"
 flask = "*"
+flask-socketio = "*"
+eventlet = "*"
 
 [dev-packages]
 coverage = "*"
